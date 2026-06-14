@@ -70,9 +70,20 @@ FONT_FILENAME :: "font.ttf"
 FONT_SIZE :: 32
 
 
+// Use this string.to<format> function to generate the enum names
+NAME_FORMAT := Name_format_options.snake
+
 // ---------------------
 // ATLAS BUILDER PROGRAM
 // ---------------------
+
+
+Name_format_options :: enum {
+	ada,
+	camel,
+	snake,
+}
+
 
 Vec2i :: [2]int
 
@@ -236,7 +247,48 @@ get_image_pixel :: proc(img: Image, x: int, y: int) -> Color {
 // Returns the format I want for names in atlas.odin. Takes the name from a path
 // and turns it from player_jump.png to Player_Jump.
 asset_name :: proc(path: string) -> string {
-	return fmt.tprintf("%s", strings.to_ada_case(slashpath.name(slashpath.base(path))))
+	switch NAME_FORMAT {
+
+	case Name_format_options.ada:
+		return fmt.tprintf("%s", strings.to_ada_case(slashpath.name(slashpath.base(path))))
+
+	case Name_format_options.camel:
+		return fmt.tprintf("%s", strings.to_camel_case(slashpath.name(slashpath.base(path))))
+	case Name_format_options.snake:
+		return fmt.tprintf("%s", strings.to_snake_case(slashpath.name(slashpath.base(path))))
+
+
+	}
+	panic("Unknown asset name format ?")
+}
+
+animation_name :: proc(basename: string, tagname: string = "") -> string {
+	switch NAME_FORMAT {
+	case Name_format_options.ada:
+		return fmt.tprint(
+			basename,
+			strings.to_ada_case(slashpath.name(slashpath.base(tagname))),
+			sep = "_",
+		)
+
+	case Name_format_options.camel:
+		return fmt.tprint(
+			basename,
+			strings.to_camel_case(slashpath.name(slashpath.base(tagname))),
+			sep = "_",
+		)
+
+
+	case Name_format_options.snake:
+		return fmt.tprint(
+			basename,
+			strings.to_snake_case(slashpath.name(slashpath.base(tagname))),
+			sep = "_",
+		)
+
+
+	}
+	panic("Unknown animation name format ?")
 }
 
 load_png_tileset :: proc(filename: string) -> (Tileset, bool) {
@@ -483,11 +535,7 @@ load_ase_texture_data :: proc(
 			case ase.Tags_Chunk:
 				for tag in c {
 					a := Animation {
-						name           = fmt.tprint(
-							base_name,
-							strings.to_ada_case(tag.name),
-							sep = "_",
-						),
+						name           = animation_name(base_name, tag.name),
 						first_texture  = fmt.tprint(base_name, tag.from_frame, sep = ""),
 						last_texture   = fmt.tprint(base_name, tag.to_frame, sep = ""),
 						loop_direction = tag.loop_direction,
