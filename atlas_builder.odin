@@ -125,6 +125,7 @@ Atlas_Glyph :: struct {
 	glyph: Glyph,
 }
 
+// Used for per-file texture data and per-frame texture data
 Texture_Data :: struct {
 	source_size:   Vec2i,
 	source_offset: Vec2i,
@@ -248,10 +249,8 @@ get_image_pixel :: proc(img: Image, x: int, y: int) -> Color {
 // and turns it from player_jump.png to Player_Jump.
 asset_name :: proc(path: string) -> string {
 	switch NAME_FORMAT {
-
 	case Name_format_options.ada:
 		return fmt.tprintf("%s", strings.to_ada_case(slashpath.name(slashpath.base(path))))
-
 	case Name_format_options.camel:
 		return fmt.tprintf("%s", strings.to_camel_case(slashpath.name(slashpath.base(path))))
 	case Name_format_options.snake:
@@ -290,6 +289,20 @@ animation_name :: proc(basename: string, tagname: string = "") -> string {
 	}
 	panic("Unknown animation name format ?")
 }
+
+
+texture_name :: proc {
+	texture_name_u16,
+	texture_name_int,
+}
+texture_name_u16 :: proc(basename: string, sequence: u16) -> string {
+	return fmt.tprint(basename, sequence, sep = "")
+}
+
+texture_name_int :: proc(basename: string, sequence: int) -> string {
+	return fmt.tprint(basename, sequence, sep = "")
+}
+
 
 load_png_tileset :: proc(filename: string) -> (Tileset, bool) {
 	data, error := os.read_entire_file_from_path(filename, context.allocator)
@@ -474,8 +487,8 @@ load_ase_texture_data :: proc(
 
 	base_name := asset_name(filename)
 	frame_idx := 0
-	animated := len(doc.frames) > 1
-	skip_writing_main_anim := false
+
+	frames_have_animation_tag := false
 	indexed := doc.header.color_depth == .Indexed
 	palette: ase.Palette_Chunk
 	if indexed {
@@ -513,6 +526,14 @@ load_ase_texture_data :: proc(
 		return
 	}
 
+	//NOTE: There are two ways of making animations:
+	// - Animation tag: This means a Tags_Chunk is present in the data, meaning we can parse a name out of it and use its bounds for construction of an animation
+	// - No Tag is persent: All frames, in total, are considered a single animation
+	//
+	// If there is only a single frame -> no animation
+	// multiple frames -> make one large animation
+	// tag -> make animation for tag
+
 	for f in doc.frames {
 		duration: f32 = f32(f.header.duration) / 1000.0
 
@@ -533,17 +554,18 @@ load_ase_texture_data :: proc(
 					}
 				}
 			case ase.Tags_Chunk:
+				// This is what happens when an animation has an "animation Tag",
 				for tag in c {
 					a := Animation {
 						name           = animation_name(base_name, tag.name),
-						first_texture  = fmt.tprint(base_name, tag.from_frame, sep = ""),
-						last_texture   = fmt.tprint(base_name, tag.to_frame, sep = ""),
+						first_texture  = texture_name(base_name, tag.from_frame),
+						last_texture   = texture_name(base_name, tag.to_frame),
 						loop_direction = tag.loop_direction,
 						repeat         = tag.repeat,
 						user_data      = nil,
 					}
 
-					skip_writing_main_anim = true
+					frames_have_animation_tag = true
 
 					// if we have encountered ud before, we wan to add it to the animation
 					// but since we don't want to attach it just yet we need to fetch the next_index it would have
@@ -599,7 +621,7 @@ load_ase_texture_data :: proc(
 				pixels_size   = {0, 0},
 				document_size = {int(doc.header.width), int(doc.header.height)},
 				duration      = duration,
-				name          = animated ? fmt.tprint(base_name, frame_idx, sep = "") : base_name,
+				name          = texture_name(base_name, frame_idx),
 				pixels        = nil,
 			}
 
@@ -670,9 +692,10 @@ load_ase_texture_data :: proc(
 			pixels_size   = s,
 			document_size = {int(doc.header.width), int(doc.header.height)},
 			duration      = duration,
-			name          = animated ? fmt.tprint(base_name, frame_idx, sep = "") : base_name,
+			name          = texture_name(base_name, frame_idx),
 			pixels        = pixels,
 		}
+
 
 		if cel_min.x > 0 {
 			td.offset.x = cel_min.x
@@ -686,14 +709,22 @@ load_ase_texture_data :: proc(
 		frame_idx += 1
 	}
 
-	if animated && frame_idx > 1 && !skip_writing_main_anim {
+	if frame_idx > 1 && !frames_have_animation_tag {
+		// Making these assumptions seems a bit too specific to me?
+		// "If no animation tag exists, then make the entire thing and all frames into an animation"
+		// "but only if there is more than one frame"
+		// "else its not animated at all, there is no animation and there is only a texture ?"
+		// This as far as i can tell this would discard any frame that is not in a tag iff any other tags exist ?
+		log.infof(
+			"File '%s' has no animation tags, but multiple frames. We assume the entire file is a single animation. Consider adding a frame tag for clarity",
+			base_name,
+		)
 		a := Animation {
 			name          = base_name,
 			first_texture = fmt.tprint(base_name, 0, sep = ""),
 			last_texture  = fmt.tprint(base_name, frame_idx - 1, sep = ""),
 			document_size = {int(document_rect.width), int(document_rect.height)},
 		}
-
 		append(animations, a)
 	}
 }
@@ -733,6 +764,7 @@ load_png_texture_data :: proc(filename: string, textures: ^[dynamic]Texture_Data
 		pixels        = slice.clone(slice.reinterpret([]Color, img.pixels.buf[:])),
 	}
 
+
 	append(textures, td)
 }
 
@@ -746,6 +778,18 @@ cel_layer_sort :: proc(i, j: ^ase.Cel_Chunk) -> bool {
 
 default_context: runtime.Context
 
+
+/* 
+ NOTE:
+ Essentially what this does is:
+ Collect ALL files together.
+ Collect all textures of those files together, and their animations (if there are any)
+ Write back all those things into a .odin file so we can use it programmatically.
+ 
+ This entire process assumes that the data is somewhat sensible and therefore there are no continuity
+ sanity checks on the data. Frames, Animations and texture information is not interlinked and only match "by name" 
+ of the resulting variables
+ */
 main :: proc() {
 	context.logger = log.create_console_logger(opt = {.Level})
 	default_context = context
