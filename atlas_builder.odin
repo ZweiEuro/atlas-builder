@@ -55,7 +55,7 @@ TILE_SIZE :: 8
 TILE_ADD_PADDING :: true
 
 // for package line at top of atlas Odin metadata file
-PACKAGE_NAME :: "game"
+PACKAGE_NAME :: "shared"
 
 // The folder within which to look for textures
 TEXTURES_DIR :: "textures"
